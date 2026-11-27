@@ -1,4 +1,4 @@
-// receiver-karte v1.0.0
+// receiver-karte v1.1.0
 // Einzeln installierbares Modul (Home Assistant Marketplace / HACS, Kategorie Dashboard).
 window.customCards = window.customCards || [];
 window.customCardFeatures = window.customCardFeatures || [];
@@ -17,6 +17,12 @@ window.customCardFeatures = window.customCardFeatures || [];
 //     - { quelle: Strm-box, name: Google TV, icon: mdi:google-play }
 //     - { quelle: Network, name: Cast / Netzwerk, icon: mdi:cast-audio }
 //   weitere: true                                     # optional, Auswahl fuer die uebrigen Quellen
+//   fernbedienung: true                               # optional, Fernbedienung zum Aufklappen
+//
+// Fernbedienung: Steuerkreuz, Zurueck/Home/Menue und Wiedergabe gehen an das Geraet der gerade
+// gewaehlten Quelle (je Quelle remote: remote.* oder webos: media_player.* eintragen), die
+// Lautstaerke-Tasten steuern immer den Receiver selbst.
+//     - { quelle: Strm-box, name: Musik-Stick, icon: mdi:music, remote: remote.wohnzimmer }
 
 const TYPE16 = "receiver-karte";
 const RV_ICON = { tv: "mdi:television", "strm-box": "mdi:google-play", network: "mdi:cast-audio", "bd/dvd": "mdi:disc-player",
@@ -26,7 +32,7 @@ const RV_ICON = { tv: "mdi:television", "strm-box": "mdi:google-play", network: 
 class ReceiverKarte extends HTMLElement {
   setConfig(c) {
     if (!c?.entity) throw new Error("entity (media_player.*) fehlt");
-    this._config = { weitere: true, ...c };
+    this._config = { weitere: true, fernbedienung: true, ...c };
     this._render();
   }
 
@@ -34,6 +40,38 @@ class ReceiverKarte extends HTMLElement {
 
   _s(id) { return id ? this._hass?.states[id] : null; }
   _dienst(d, s, daten) { return this._hass.callService(d, s, daten); }
+
+  // Geraet hinter der aktiven Quelle (fuer Steuerkreuz und Wiedergabe-Tasten)
+  _ziel() {
+    const q = this._s(this._config.entity)?.attributes.source;
+    const roh = (this._config.quellen || []).find((x) => x && typeof x === "object" && x.quelle === q);
+    return roh && (roh.remote || roh.webos) ? { name: roh.name || roh.quelle, remote: roh.remote, webos: roh.webos } : null;
+  }
+
+  _fbMoeglich() {
+    return this._config.fernbedienung !== false
+      && (this._config.quellen || []).some((x) => x && typeof x === "object" && (x.remote || x.webos));
+  }
+
+  _taste(cmd) {
+    const e = { entity_id: this._config.entity };
+    if (cmd === "VOLUME_UP") return this._dienst("media_player", "volume_up", e);
+    if (cmd === "VOLUME_DOWN") return this._dienst("media_player", "volume_down", e);
+    if (cmd === "VOLUME_MUTE") {
+      return this._dienst("media_player", "volume_mute", { ...e, is_volume_muted: !this._s(this._config.entity)?.attributes.is_volume_muted });
+    }
+    const z = this._ziel();
+    if (!z) return;
+    if (z.webos) {
+      const lg = { DPAD_UP: "UP", DPAD_DOWN: "DOWN", DPAD_LEFT: "LEFT", DPAD_RIGHT: "RIGHT", DPAD_CENTER: "ENTER", BACK: "BACK",
+        HOME: "HOME", MENU: "MENU" }[cmd];
+      if (lg) return this._dienst("webostv", "button", { entity_id: z.webos, button: lg });
+      const mp = { MEDIA_PLAY_PAUSE: "media_play_pause", MEDIA_PREVIOUS: "media_previous_track", MEDIA_NEXT: "media_next_track" }[cmd];
+      if (mp) return this._dienst("media_player", mp, { entity_id: z.webos });
+      return;
+    }
+    return this._dienst("remote", "send_command", { entity_id: z.remote, command: cmd });
+  }
 
   _quellen() {
     const s = this._s(this._config.entity), liste = s?.attributes.source_list || [];
@@ -85,6 +123,21 @@ class ReceiverKarte extends HTMLElement {
         .t2 { font-size: 12px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .tasten { display: flex; gap: 6px; }
         .aus .laut, .aus .zeile2 { opacity: .45; }
+        .auf { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 12px; padding: 6px;
+          font-size: 13px; color: var(--secondary-text-color); border-top: 1px solid var(--divider-color, #444); }
+        .auf ha-icon { --mdc-icon-size: 18px; transition: transform .2s; }
+        .auf.offen ha-icon { transform: rotate(180deg); }
+        .fbbox { display: none; margin-top: 8px; }
+        .fbbox.offen { display: block; }
+        .fbziel { text-align: center; font-size: 12px; color: var(--secondary-text-color); margin-bottom: 8px; }
+        .fb { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
+        .kreuz { display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 4px; }
+        .kreuz button { border-radius: 12px; background: var(--secondary-background-color, rgba(127,127,127,.15)); display: flex; align-items: center; justify-content: center; }
+        .kreuz button.ok { border-radius: 50%; background: var(--primary-color); color: var(--text-primary-color, #fff); font-weight: 500; }
+        .kreuz ha-icon { --mdc-icon-size: 24px; }
+        .spalte { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .medien { display: flex; justify-content: center; gap: 10px; margin-top: 10px; }
+        .fbbox button:disabled { opacity: .35; cursor: default; }
       </style>
       <ha-card>
         <div class="kopf">
@@ -113,6 +166,34 @@ class ReceiverKarte extends HTMLElement {
             <button class="rund klein vor" title="Weiter"><ha-icon icon="mdi:skip-next"></ha-icon></button>
           </div>
         </div>
+        <button class="auf"><span>Fernbedienung</span><ha-icon icon="mdi:chevron-down"></ha-icon></button>
+        <div class="fbbox">
+          <div class="fbziel"></div>
+          <div class="fb">
+            <div class="spalte">
+              <button class="rund ziel" data-k="BACK" title="Zurück"><ha-icon icon="mdi:arrow-u-left-top"></ha-icon></button>
+              <button class="rund ziel" data-k="HOME" title="Startseite"><ha-icon icon="mdi:home"></ha-icon></button>
+              <button class="rund ziel" data-k="MENU" title="Menü"><ha-icon icon="mdi:menu"></ha-icon></button>
+            </div>
+            <div class="kreuz">
+              <span></span><button class="ziel" data-k="DPAD_UP"><ha-icon icon="mdi:chevron-up"></ha-icon></button><span></span>
+              <button class="ziel" data-k="DPAD_LEFT"><ha-icon icon="mdi:chevron-left"></ha-icon></button>
+              <button class="ok ziel" data-k="DPAD_CENTER">OK</button>
+              <button class="ziel" data-k="DPAD_RIGHT"><ha-icon icon="mdi:chevron-right"></ha-icon></button>
+              <span></span><button class="ziel" data-k="DPAD_DOWN"><ha-icon icon="mdi:chevron-down"></ha-icon></button><span></span>
+            </div>
+            <div class="spalte">
+              <button class="rund rx" data-k="VOLUME_UP" title="Lauter"><ha-icon icon="mdi:volume-plus"></ha-icon></button>
+              <button class="rund rx" data-k="VOLUME_MUTE" title="Stumm"><ha-icon icon="mdi:volume-off"></ha-icon></button>
+              <button class="rund rx" data-k="VOLUME_DOWN" title="Leiser"><ha-icon icon="mdi:volume-minus"></ha-icon></button>
+            </div>
+          </div>
+          <div class="medien">
+            <button class="rund klein ziel" data-k="MEDIA_PREVIOUS" title="Zurück"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+            <button class="rund klein ziel" data-k="MEDIA_PLAY_PAUSE" title="Wiedergabe / Pause"><ha-icon icon="mdi:play-pause"></ha-icon></button>
+            <button class="rund klein ziel" data-k="MEDIA_NEXT" title="Weiter"><ha-icon icon="mdi:skip-next"></ha-icon></button>
+          </div>
+        </div>
       </ha-card>`;
     const r = this.shadowRoot, e = () => ({ entity_id: this._config.entity });
     const an = () => this._s(this._config.entity)?.state !== "off";
@@ -137,6 +218,13 @@ class ReceiverKarte extends HTMLElement {
     r.querySelector(".zurueck").addEventListener("click", () => this._dienst("media_player", "media_previous_track", p()));
     r.querySelector(".play").addEventListener("click", () => this._dienst("media_player", "media_play_pause", p()));
     r.querySelector(".vor").addEventListener("click", () => this._dienst("media_player", "media_next_track", p()));
+    r.querySelector(".auf").addEventListener("click", () => {
+      this._offen = !this._offen;
+      r.querySelector(".auf").classList.toggle("offen", this._offen);
+      r.querySelector(".fbbox").classList.toggle("offen", this._offen);
+    });
+    r.querySelectorAll(".fbbox [data-k]").forEach((b) => b.addEventListener("click", () => this._taste(b.dataset.k)));
+    this._offen = false;
     this._quellenSchluessel = null;
     this._update();
   }
@@ -229,9 +317,23 @@ class ReceiverKarte extends HTMLElement {
       r.querySelector(".play ha-icon").setAttribute("icon", pl?.state === "playing" ? "mdi:pause" : "mdi:play");
       r.querySelector(".tasten").style.display = quelleT === pa ? "" : "none";
     }
+
+    // Fernbedienung
+    const fb = this._fbMoeglich();
+    r.querySelector(".auf").style.display = fb ? "" : "none";
+    if (!fb && this._offen) {
+      this._offen = false;
+      r.querySelector(".fbbox").classList.remove("offen");
+      r.querySelector(".auf").classList.remove("offen");
+    }
+    const z = an ? this._ziel() : null;
+    r.querySelector(".fbziel").textContent = !an ? "Receiver ist aus"
+      : z ? `Steuert: ${z.name} · Lautstärke: Receiver` : "Für diese Quelle ist keine Fernbedienung hinterlegt – nur Lautstärke";
+    r.querySelectorAll(".fbbox .ziel").forEach((b) => (b.disabled = !z));
+    r.querySelectorAll(".fbbox .rx").forEach((b) => (b.disabled = !an));
   }
 
-  getCardSize() { return 4; }
+  getCardSize() { return this._fbMoeglich() ? 5 : 4; }
   getGridOptions() { return { columns: 12, rows: "auto" }; }
 
   static getConfigForm() {
@@ -241,12 +343,13 @@ class ReceiverKarte extends HTMLElement {
         { name: "player", selector: { entity: { domain: "media_player" } } },
         { name: "name", selector: { text: {} } },
         { name: "weitere", selector: { boolean: {} } },
+        { name: "fernbedienung", selector: { boolean: {} } },
         { name: "quellen", selector: { object: {} } },
       ],
       computeLabel: (s) => ({ entity: "Receiver (Hauptzone)", player: "Abspieler für Titel (z. B. Music Assistant)", name: "Name",
-        weitere: "Übrige Quellen als Auswahl anzeigen", quellen: "Quellen-Tasten" }[s.name] || s.name),
+        weitere: "Übrige Quellen als Auswahl anzeigen", fernbedienung: "Fernbedienung zum Aufklappen", quellen: "Quellen-Tasten" }[s.name] || s.name),
       computeHelper: (s) => (s.name === "quellen"
-        ? "Liste mit quelle (Name wie am Receiver), name, icon – z. B. - {quelle: TV, name: TV, icon: mdi:television}" : undefined),
+        ? "Liste mit quelle (Name wie am Receiver), name, icon und für die Fernbedienung remote (remote.*) oder webos (media_player.*) – z. B. - {quelle: Strm-box, name: Musik, icon: mdi:music, remote: remote.wohnzimmer}" : undefined),
     };
   }
 
@@ -259,8 +362,8 @@ class ReceiverKarte extends HTMLElement {
 
 if (!customElements.get(TYPE16)) customElements.define(TYPE16, ReceiverKarte);
 if (!window.customCards.some((c) => c.type === TYPE16)) {
-  window.customCards.push({ type: TYPE16, name: "Receiver-Karte", description: "AV-Receiver: Ein/Aus, Lautstärke, Quellen als Tasten, Klangmodus und laufender Titel" });
+  window.customCards.push({ type: TYPE16, name: "Receiver-Karte", description: "AV-Receiver: Ein/Aus, Lautstärke, Quellen als Tasten, Klangmodus, laufender Titel und Fernbedienung" });
 }
 }
 
-console.info("%c receiver-karte %c v1.0.0 ", "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4");
+console.info("%c receiver-karte %c v1.1.0 ", "color:#fff;background:#03a9f4;font-weight:700", "color:#03a9f4");
