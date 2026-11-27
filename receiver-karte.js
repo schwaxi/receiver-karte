@@ -1,4 +1,4 @@
-// receiver-karte v1.1.0
+// receiver-karte v1.1.1
 // Einzeln installierbares Modul (Home Assistant Marketplace / HACS, Kategorie Dashboard).
 window.customCards = window.customCards || [];
 window.customCardFeatures = window.customCardFeatures || [];
@@ -362,7 +362,7 @@ class ReceiverKarte extends HTMLElement {
 
 if (!customElements.get(TYPE16)) customElements.define(TYPE16, ReceiverKarte);
 if (!window.customCards.some((c) => c.type === TYPE16)) {
-  window.customCards.push({ type: TYPE16, name: "Receiver-Karte", description: "AV-Receiver: Ein/Aus, Lautstärke, Quellen als Tasten, Klangmodus, laufender Titel und Fernbedienung" });
+  window.customCards.push({ type: TYPE16, name: "Receiver-Karte", description: "AV-Receiver: Ein/Aus, Lautstärke, Quellen als Tasten, Klangmodus, laufender Titel und Fernbedienung", preview: true });
 }
 }
 
